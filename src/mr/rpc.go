@@ -15,11 +15,26 @@ import "strconv"
 //
 
 type ExampleArgs struct {
-	X int
+    X int
 }
 
 type ExampleReply struct {
-	Y int
+    Y int
+}
+
+type TaskType int
+
+const (
+    Map TaskType = iota
+    Reduce
+    None
+)
+
+type TaskArgs struct {
+    InputFile string
+    NReduce int
+    Type TaskType 
+    Idx int
 }
 
 // Add your RPC definitions here.
@@ -30,7 +45,9 @@ type ExampleReply struct {
 // Can't use the current directory since
 // Athena AFS doesn't support UNIX-domain sockets.
 func coordinatorSock() string {
-	s := "/var/tmp/824-mr-"
-	s += strconv.Itoa(os.Getuid())
-	return s
+    s := "/var/tmp/824-mr-"
+    s += strconv.Itoa(os.Getuid())
+    // sample output: s = /var/tmp/824-mr-501
+    return s
 }
+
