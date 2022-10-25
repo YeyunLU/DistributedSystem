@@ -1,55 +1,45 @@
 package mr
 
 import (
-    "log"
-    "net"
-    "net/http"
-    "net/rpc"
-    "os"
+	"log"
+	"net"
+	"net/http"
+	"net/rpc"
+	"os"
 )
 
-
 type Coordinator struct {
-    files []string
-    nReduce int
-    mapIdx int
-    reduceIdx int
+	nReduce    int
+	mapIdx     int
+	reduceIdx  int
+	inputFiles []string
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
 func (c *Coordinator) AssignTask(input *string, taskArgs *TaskArgs) error {
-    if c.mapIdx < len(c.files){
-        // Assigning map tasks
-        println("Assigning Map task to the worker")
-        taskArgs.InputFile = c.files[c.mapIdx]
-        taskArgs.Type = Map
-        taskArgs.Idx = c.mapIdx
-        taskArgs.NReduce = c.nReduce
-        c.mapIdx++
-    } else if c.reduceIdx < c.nReduce {
-        // Assigning reduce tasks
-        println("Assigning Reduce task to the worker")
-        taskArgs.Type = Reduce
-        taskArgs.Idx = c.reduceIdx
-        c.reduceIdx++
-    } else {
-        // Terminate the workers
-        println("Finished all the job, stop working")
-        taskArgs.Type = None
-    }
-    return nil
+	if c.mapIdx < len(c.inputFiles) {
+		// Assigning map tasks
+		println("Assigning Map task to the worker")
+		taskArgs.InputFile = c.inputFiles[c.mapIdx]
+		taskArgs.Type = Map
+		taskArgs.Idx = c.mapIdx
+		taskArgs.NReduce = c.nReduce
+		c.mapIdx++
+	} else if c.reduceIdx < c.nReduce {
+		// Assigning reduce tasks
+		println("Assigning Reduce task to the worker")
+		taskArgs.Type = Reduce
+		taskArgs.Idx = c.reduceIdx
+		taskArgs.NMap = len(c.inputFiles)
+		c.reduceIdx++
+	} else {
+		// Terminate the workers
+		println("Finished all the job, stop working")
+		taskArgs.Type = None
+	}
+	return nil
 }
-
-// Reduce Tasks
-// func (c *Coordinator) ReduceHandler(key string, values []string, 
-//  reducef func(string, []string) string) error{
-//  output := reducef(key, values)
-//  println(output)
-//  // TODO: write to local file mr-out-1 for final result
-//  // c.results = append(c.results, KeyValue{key, output})
-//  return nil
-// }
 
 //
 // an example RPC handler.
@@ -57,28 +47,27 @@ func (c *Coordinator) AssignTask(input *string, taskArgs *TaskArgs) error {
 // the RPC argument and reply types are defined in rpc.go.
 //
 func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
-    reply.Y = args.X + 1
-    return nil
+	reply.Y = args.X + 1
+	return nil
 }
-
 
 //
 // start a thread that listens for RPCs from worker.go
 //
 func (c *Coordinator) server() {
-    e := rpc.Register(c)
-    if e != nil {
-        log.Fatal("register error:", e)
-    }
-    rpc.HandleHTTP()
-    //l, e := net.Listen("tcp", ":1234")
-    sockname := coordinatorSock()
-    os.Remove(sockname)
-    l, e := net.Listen("unix", sockname)
-    if e != nil {
-        log.Fatal("listen error:", e)
-    }
-    go http.Serve(l, nil)
+	e := rpc.Register(c)
+	if e != nil {
+		log.Fatal("register error:", e)
+	}
+	rpc.HandleHTTP()
+	//l, e := net.Listen("tcp", ":1234")
+	sockname := coordinatorSock()
+	os.Remove(sockname)
+	l, e := net.Listen("unix", sockname)
+	if e != nil {
+		log.Fatal("listen error:", e)
+	}
+	go http.Serve(l, nil)
 }
 
 //
@@ -86,12 +75,12 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-    ret := false
+	ret := false
 
-    // Your code here.
-    // ret = true
+	// Your code here.
+	// ret = true
 
-    return ret
+	return ret
 }
 
 //
@@ -100,11 +89,10 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-    c := Coordinator{}
-    c.files = files
-    c.nReduce = nReduce
+	c := Coordinator{}
+	c.inputFiles = files
+	c.nReduce = nReduce
 
-    c.server()
-    return &c
+	c.server()
+	return &c
 }
-

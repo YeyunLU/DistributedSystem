@@ -32,9 +32,10 @@ const (
 
 type TaskArgs struct {
     InputFile string
-    NReduce int
-    Type TaskType 
+	Type TaskType 
     Idx int
+	NMap int
+    NReduce int
 }
 
 // Add your RPC definitions here.
