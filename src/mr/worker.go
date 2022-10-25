@@ -114,8 +114,8 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	taskIdx := taskArgs.Idx
 	nMapTask := taskArgs.NMap
 	currMapIdx := 0
-	fmt.Printf("Executing Reduce Task...")
-	var results []KeyValue
+	fmt.Printf("Executing Reduce Task...\n")
+	counts := map[string]int{}
 	for currMapIdx < nMapTask {
 		// Read input from intermidate files
 		fileName := "mr-" + strconv.Itoa(currMapIdx) + "-" + strconv.Itoa(taskIdx)
@@ -149,7 +149,8 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 			for k := curIdx; k < tmpIdx; k++ {
 				values = append(values, kvItem[1])
 			}
-			results = append(results, KeyValue{kvItem[0], reducef(kvItem[0], values)})
+			reduceValue, _ := strconv.Atoi(reducef(kvItem[0], values))
+			counts[kvItem[0]] = counts[kvItem[0]] + reduceValue
 			curIdx = tmpIdx
 		}
 		currMapIdx++
@@ -160,8 +161,8 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	if err != nil {
 		log.Fatal(err)
 	}
-	for _, kv := range results {
-		fmt.Fprintf(ofile, "%v %v\n", kv.Key, kv.Value)
+	for key, value := range counts {
+		fmt.Fprintf(ofile, "%v %v\n", key, strconv.Itoa(value))
 	}
 	ofile.Close()
 	return nil
