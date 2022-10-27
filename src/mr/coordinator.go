@@ -6,9 +6,11 @@ import (
 	"net/http"
 	"net/rpc"
 	"os"
+	"sync"
 )
 
 type Coordinator struct {
+	mu         sync.Mutex
 	nReduce    int
 	mapIdx     int
 	reduceIdx  int
@@ -17,7 +19,18 @@ type Coordinator struct {
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c *Coordinator) AssignTask(input *string, taskArgs *TaskArgs) error {
+func (c *Coordinator) AssignTask(previousTask TaskType, taskArgs *TaskArgs) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Increase idx for map or reduce tasks that are already done
+	if previousTask == 0 {
+		c.mapIdx++
+	} else if previousTask == 1 {
+		c.reduceIdx++
+	}
+
+	// Assign different tasks to workers
 	if c.mapIdx < len(c.inputFiles) {
 		// Assigning map tasks
 		println("Assigning Map task to the worker")
@@ -25,14 +38,12 @@ func (c *Coordinator) AssignTask(input *string, taskArgs *TaskArgs) error {
 		taskArgs.Type = Map
 		taskArgs.Idx = c.mapIdx
 		taskArgs.NReduce = c.nReduce
-		c.mapIdx++
 	} else if c.reduceIdx < c.nReduce {
 		// Assigning reduce tasks
 		println("Assigning Reduce task to the worker")
 		taskArgs.Type = Reduce
 		taskArgs.Idx = c.reduceIdx
 		taskArgs.NMap = len(c.inputFiles)
-		c.reduceIdx++
 	} else {
 		// Terminate the workers
 		println("Finished all the job, stop working")
@@ -75,12 +86,9 @@ func (c *Coordinator) server() {
 // if the entire job has finished.
 //
 func (c *Coordinator) Done() bool {
-	ret := false
-
-	// Your code here.
-	// ret = true
-
-	return ret
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.mapIdx >= len(c.inputFiles) && c.reduceIdx >= c.nReduce 
 }
 
 //

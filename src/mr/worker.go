@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 //
@@ -50,23 +51,34 @@ func Worker(mapf func(string, string) []KeyValue,
 	// CallExample()
 
 	// while true loop until there is no tasks left
+	previousTaskType := None // TaskType.None
 	for {
 		taskArgs := TaskArgs{}
-		askForTask(&taskArgs)
-		if taskArgs.Type == 0 {
-			executeMapTask(taskArgs, mapf)
-		} else if taskArgs.Type == 1 {
-			executeReduceTask(taskArgs, reducef)
-		} else {
+		err := askForTask(previousTaskType, &taskArgs) // use & pointer to update value for the input param
+		
+		// terminate if fail to communicate with the coordiator
+		// the possible reason would be we already terminated the coordiator
+		if err != nil {
 			break
 		}
+
+		if taskArgs.Type == 0 { // Got a Map task
+			executeMapTask(taskArgs, mapf)
+			previousTaskType = Map
+		} else if taskArgs.Type == 1 { // Got a Reduce task
+			executeReduceTask(taskArgs, reducef)
+			previousTaskType = Reduce
+		} else { // Got no tasks, exit
+			break
+		}
+		time.Sleep(time.Second) // sleep 1 s between 2 tasks
 	}
 }
 
-func askForTask(taskArgs *TaskArgs) error {
-	ok := call("Coordinator.AssignTask", "asking", &taskArgs)
+func askForTask(previousTask TaskType,taskArgs *TaskArgs) error {
+	ok := call("Coordinator.AssignTask", previousTask, &taskArgs)
 	if !ok {
-		fmt.Printf("Failed to ask for a task!\n")
+		log.Fatal("Failed to ask for a task")
 	}
 	return nil
 }
@@ -167,16 +179,6 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	ofile.Close()
 	return nil
 }
-
-// Reduce Tasks
-// func (c *Coordinator) ReduceHandler(key string, values []string,
-//  reducef func(string, []string) string) error{
-//  output := reducef(key, values)
-//  println(output)
-//  // TODO: write to local file mr-out-1 for final result
-//  // c.results = append(c.results, KeyValue{key, output})
-//  return nil
-// }
 
 //
 // example function to show how to make an RPC call to the coordinator.
