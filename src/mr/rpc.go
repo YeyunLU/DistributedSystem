@@ -9,6 +9,7 @@ package mr
 import (
 	"os"
 	"strconv"
+	"time"
 )
 
 //
@@ -32,12 +33,19 @@ const (
 	None
 )
 
+type PreviousTask struct {
+	Idx  int
+	Type TaskType
+}
+
 type TaskArgs struct {
 	InputFile string
 	Type      TaskType
 	Idx       int
 	NMap      int
 	NReduce   int
+	StartAt   time.Time
+	Done      bool
 }
 
 // Add your RPC definitions here.

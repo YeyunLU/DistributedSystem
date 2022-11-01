@@ -10,7 +10,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"time"
 )
 
 //
@@ -51,11 +50,11 @@ func Worker(mapf func(string, string) []KeyValue,
 	// CallExample()
 
 	// while true loop until there is no tasks left
-	previousTaskType := None // TaskType.None
+	previousTask := PreviousTask{Type: None} // TaskType.None
 	for {
 		taskArgs := TaskArgs{}
-		err := askForTask(previousTaskType, &taskArgs) // use & pointer to update value for the input param
-		
+		err := askForTask(previousTask, &taskArgs) // use & pointer to update value for the input param
+
 		// terminate if fail to communicate with the coordiator
 		// the possible reason would be we already terminated the coordiator
 		if err != nil {
@@ -64,18 +63,20 @@ func Worker(mapf func(string, string) []KeyValue,
 
 		if taskArgs.Type == 0 { // Got a Map task
 			executeMapTask(taskArgs, mapf)
-			previousTaskType = Map
+			previousTask.Type = Map // Update to mark done
+			previousTask.Idx = taskArgs.Idx
 		} else if taskArgs.Type == 1 { // Got a Reduce task
 			executeReduceTask(taskArgs, reducef)
-			previousTaskType = Reduce
+			previousTask.Type = Reduce // Update to mark done
+			previousTask.Idx = taskArgs.Idx
 		} else { // Got no tasks, exit
 			break
 		}
-		time.Sleep(time.Second) // sleep 1 s between 2 tasks
+		// time.Sleep(time.Second) // sleep 1 s between 2 tasks
 	}
 }
 
-func askForTask(previousTask TaskType,taskArgs *TaskArgs) error {
+func askForTask(previousTask PreviousTask, taskArgs *TaskArgs) error {
 	ok := call("Coordinator.AssignTask", previousTask, &taskArgs)
 	if !ok {
 		log.Fatal("Failed to ask for a task")
@@ -87,7 +88,7 @@ func executeMapTask(taskArgs TaskArgs, mapf func(string, string) []KeyValue) err
 
 	fileName := taskArgs.InputFile
 	mapTaskIdx := taskArgs.Idx
-	fmt.Printf("Executing Map Task... Input File: %s \n", fileName)
+	// fmt.Printf("Executing Map Task... Input File: %s \n", fileName)
 
 	// Read content from the input file
 	file, err := os.Open(fileName)
@@ -111,10 +112,7 @@ func executeMapTask(taskArgs TaskArgs, mapf func(string, string) []KeyValue) err
 		// example intermidate output files name: mr-0-0
 		oname := "mr-" + strconv.Itoa(mapTaskIdx) + "-" + strconv.Itoa(reduceIdx)
 		// Wirte to the file if exist, and create new files if not exist
-		ofile, err := os.OpenFile(oname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
-		if err != nil {
-			log.Fatal(err)
-		}
+		ofile, _ := os.OpenFile(oname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
 		fmt.Fprintf(ofile, "%v %v\n", kv.Key, kv.Value)
 		ofile.Close()
 	}
@@ -126,7 +124,7 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	taskIdx := taskArgs.Idx
 	nMapTask := taskArgs.NMap
 	currMapIdx := 0
-	fmt.Printf("Executing Reduce Task...\n")
+	// fmt.Printf("Executing Reduce Task...\n")
 	counts := map[string]int{}
 	for currMapIdx < nMapTask {
 		// Read input from intermidate files

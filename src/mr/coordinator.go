@@ -7,48 +7,93 @@ import (
 	"net/rpc"
 	"os"
 	"sync"
+	"time"
 )
 
+type MapTask struct {
+	idx       int
+	inputFile string
+	StartAt   time.Time
+	Done      bool
+}
+
+type ReduceTask struct {
+	idx     int
+	StartAt time.Time
+	Done    bool
+}
+
 type Coordinator struct {
-	mu         sync.Mutex
-	nReduce    int
-	mapIdx     int
-	reduceIdx  int
-	inputFiles []string
+	mu               sync.Mutex
+	nMap             int
+	nReduce          int
+	mapTasks         []MapTask
+	reduceTasks      []ReduceTask
+	remainMapTask    int
+	remainReduceTask int
 }
 
 // Your code here -- RPC handlers for the worker to call.
 
-func (c *Coordinator) AssignTask(previousTask TaskType, taskArgs *TaskArgs) error {
+func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Increase idx for map or reduce tasks that are already done
-	if previousTask == 0 {
-		c.mapIdx++
-	} else if previousTask == 1 {
-		c.reduceIdx++
+	// Increase idx for map or reduce tasks that are already Done
+	if previousTask.Type == 0 {
+		if !c.mapTasks[previousTask.Idx].Done {
+			// fmt.Printf("Worker %d finished Map task %d at time: %s \n",
+			// 	previousTask.WorkerIdx, previousTask.Idx, time.Now())
+			c.mapTasks[previousTask.Idx].Done = true
+			c.remainMapTask--
+		}
+	} else if previousTask.Type == 1 {
+		if !c.reduceTasks[previousTask.Idx].Done {
+			// fmt.Printf("Worker %d finished Reduce task %d at time: %s \n",
+			// 	previousTask.WorkerIdx, previousTask.Idx, time.Now())
+			c.reduceTasks[previousTask.Idx].Done = true
+			c.remainReduceTask--
+		}
 	}
 
 	// Assign different tasks to workers
-	if c.mapIdx < len(c.inputFiles) {
+	now := time.Now()
+	tenMinsAgo := now.Add(-30 * time.Second)
+	if c.remainMapTask > 0 {
 		// Assigning map tasks
-		println("Assigning Map task to the worker")
-		taskArgs.InputFile = c.inputFiles[c.mapIdx]
-		taskArgs.Type = Map
-		taskArgs.Idx = c.mapIdx
-		taskArgs.NReduce = c.nReduce
-	} else if c.reduceIdx < c.nReduce {
+		for idx := range c.mapTasks {
+			task := &c.mapTasks[idx]
+			if !task.Done && task.StartAt.Before(tenMinsAgo) {
+				// fmt.Printf("Assigning Map task %d to the worker %d at time: %s \n",
+				// 	task.idx, previousTask.WorkerIdx, time.Now())
+				task.StartAt = now
+				taskArgs.InputFile = task.inputFile
+				taskArgs.Type = Map
+				taskArgs.Idx = task.idx
+				taskArgs.NReduce = c.nReduce
+				return nil
+			}
+		}
+	} else if c.remainReduceTask > 0 {
 		// Assigning reduce tasks
-		println("Assigning Reduce task to the worker")
-		taskArgs.Type = Reduce
-		taskArgs.Idx = c.reduceIdx
-		taskArgs.NMap = len(c.inputFiles)
+		for idx := range c.reduceTasks {
+			task := &c.reduceTasks[idx]
+			if !task.Done && task.StartAt.Before(tenMinsAgo) {
+				// fmt.Printf("Assigning Reduce task %d to the worker %d at time: %s\n",
+				// 	task.idx, previousTask.WorkerIdx, time.Now())
+				task.StartAt = now
+				taskArgs.Type = Reduce
+				taskArgs.Idx = task.idx
+				taskArgs.NMap = c.nMap
+				return nil
+			}
+		}
 	} else {
 		// Terminate the workers
 		println("Finished all the job, stop working")
 		taskArgs.Type = None
 	}
+
 	return nil
 }
 
@@ -88,7 +133,7 @@ func (c *Coordinator) server() {
 func (c *Coordinator) Done() bool {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.mapIdx >= len(c.inputFiles) && c.reduceIdx >= c.nReduce 
+	return c.remainMapTask == 0 && c.remainReduceTask == 0
 }
 
 //
@@ -97,9 +142,20 @@ func (c *Coordinator) Done() bool {
 // nReduce is the number of reduce tasks to use.
 //
 func MakeCoordinator(files []string, nReduce int) *Coordinator {
-	c := Coordinator{}
-	c.inputFiles = files
-	c.nReduce = nReduce
+	c := Coordinator{
+		nMap:             len(files),
+		nReduce:          nReduce,
+		mapTasks:         make([]MapTask, len(files)),
+		reduceTasks:      make([]ReduceTask, nReduce),
+		remainMapTask:    len(files),
+		remainReduceTask: nReduce,
+	}
+	for idx, file := range files {
+		c.mapTasks[idx] = MapTask{idx: idx, inputFile: file, Done: false}
+	}
+	for i := 0; i < nReduce; i++ {
+		c.reduceTasks[i] = ReduceTask{idx: i, Done: false}
+	}
 
 	c.server()
 	return &c
