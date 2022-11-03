@@ -58,7 +58,7 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 
 	// Assign different tasks to workers
 	now := time.Now()
-	tenMinsAgo := now.Add(-30 * time.Second)
+	tenMinsAgo := now.Add(-10 * time.Second)
 	if c.remainMapTask > 0 {
 		// Assigning map tasks
 		for idx := range c.mapTasks {
@@ -90,7 +90,7 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 		}
 	} else {
 		// Terminate the workers
-		println("Finished all the job, stop working")
+		// println("Finished all the job, stop working")
 		taskArgs.Type = None
 	}
 

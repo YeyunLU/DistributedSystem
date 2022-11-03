@@ -1,6 +1,7 @@
 package mr
 
 import (
+	"encoding/json"
 	"fmt"
 	"hash/fnv"
 	"io/ioutil"
@@ -9,7 +10,6 @@ import (
 	"os"
 	"sort"
 	"strconv"
-	"strings"
 )
 
 //
@@ -91,30 +91,34 @@ func executeMapTask(taskArgs TaskArgs, mapf func(string, string) []KeyValue) err
 	// fmt.Printf("Executing Map Task... Input File: %s \n", fileName)
 
 	// Read content from the input file
-	file, err := os.Open(fileName)
-	if err != nil {
-		log.Fatalf("cannot open %v", fileName)
-	}
-	content, err := ioutil.ReadAll(file)
-	if err != nil {
-		log.Fatalf("cannot read %v", fileName)
-	}
-	file.Close()
+	file, _ := os.Open(fileName)
+	content, _ := ioutil.ReadAll(file)
+	defer file.Close()
 
 	// Call map function from wc.go
 	kva := mapf(fileName, string(content))
 
 	sort.Sort(ByKey(kva))
 
-	// Write to intermidiate files
+	// Group key value pairs by hash key
+	kvsByReduce := make(map[int][]KeyValue)
 	for _, kv := range kva {
 		reduceIdx := ihash(kv.Key) % taskArgs.NReduce
-		// example intermidate output files name: mr-0-0
-		oname := "mr-" + strconv.Itoa(mapTaskIdx) + "-" + strconv.Itoa(reduceIdx)
-		// Wirte to the file if exist, and create new files if not exist
-		ofile, _ := os.OpenFile(oname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
-		fmt.Fprintf(ofile, "%v %v\n", kv.Key, kv.Value)
-		ofile.Close()
+		kvsByReduce[reduceIdx] = append(kvsByReduce[reduceIdx], kv)
+	}
+
+	// Write to intermidiate files
+	for idx, kvs := range kvsByReduce {
+		oname := "mr-" + strconv.Itoa(mapTaskIdx) + "-" + strconv.Itoa(idx)
+		ofile, _ := os.Create(oname)
+		defer ofile.Close()
+		enc := json.NewEncoder(ofile)
+		for _, kv := range kvs {
+			err := enc.Encode(&kv)
+			if err != nil {
+				log.Fatal(err)
+			}
+		}
 	}
 
 	return nil
@@ -127,54 +131,45 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	// fmt.Printf("Executing Reduce Task...\n")
 	counts := map[string]int{}
 	for currMapIdx < nMapTask {
+		kva := []KeyValue{}
 		// Read input from intermidate files
 		fileName := "mr-" + strconv.Itoa(currMapIdx) + "-" + strconv.Itoa(taskIdx)
-		file, err := os.Open(fileName)
-		if err != nil {
-			log.Fatalf("cannot open %v", fileName)
-		}
-		content, err := ioutil.ReadAll(file)
-		if err != nil {
-			log.Fatalf("cannot read %v", fileName)
-		}
-		file.Close()
-		items := strings.Split(string(content), "\n")
-		if len(items) <= 0 {
-			fmt.Printf("No items in file: %s \n", fileName)
-			return nil
+		file, _ := os.Open(fileName)
+		defer file.Close()
+		dec := json.NewDecoder(file)
+		for {
+			var kv KeyValue
+			if err := dec.Decode(&kv); err != nil {
+				break
+			}
+			kva = append(kva, kv)
 		}
 		// Reduce implementation
 		curIdx := 0
-		for curIdx < len(items) {
+		for curIdx < len(kva) {
 			tmpIdx := curIdx + 1
-			if len(items[curIdx]) == 0 { // skip empty inputs
-				curIdx++
-				continue
-			}
-			kvItem := strings.Split(items[curIdx], " ") // kvItem[0] for key, kvItem[1] for value
-			for tmpIdx < len(items) && items[tmpIdx] == items[curIdx] {
+			key := kva[curIdx].Key
+			value := kva[curIdx].Value
+			for tmpIdx < len(kva) && kva[tmpIdx].Key == key {
 				tmpIdx++
 			}
 			values := []string{}
 			for k := curIdx; k < tmpIdx; k++ {
-				values = append(values, kvItem[1])
+				values = append(values, value)
 			}
-			reduceValue, _ := strconv.Atoi(reducef(kvItem[0], values))
-			counts[kvItem[0]] = counts[kvItem[0]] + reduceValue
+			reduceValue, _ := strconv.Atoi(reducef(key, values))
+			counts[key] = counts[key] + reduceValue
 			curIdx = tmpIdx
 		}
 		currMapIdx++
 	}
 	// Write results into output files
 	oname := "mr-out-" + strconv.Itoa(taskIdx)
-	ofile, err := os.OpenFile(oname, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0664)
-	if err != nil {
-		log.Fatal(err)
-	}
+	ofile, _ := os.Create(oname)
+	defer ofile.Close()
 	for key, value := range counts {
 		fmt.Fprintf(ofile, "%v %v\n", key, strconv.Itoa(value))
 	}
-	ofile.Close()
 	return nil
 }
 
