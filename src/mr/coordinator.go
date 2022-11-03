@@ -1,6 +1,7 @@
 package mr
 
 import (
+	// "fmt"
 	"log"
 	"net"
 	"net/http"
@@ -42,15 +43,13 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 	// Increase idx for map or reduce tasks that are already Done
 	if previousTask.Type == 0 {
 		if !c.mapTasks[previousTask.Idx].Done {
-			// fmt.Printf("Worker %d finished Map task %d at time: %s \n",
-			// 	previousTask.WorkerIdx, previousTask.Idx, time.Now())
+			// fmt.Printf("Worker finished Map task %d\n", previousTask.Idx)
 			c.mapTasks[previousTask.Idx].Done = true
 			c.remainMapTask--
 		}
 	} else if previousTask.Type == 1 {
 		if !c.reduceTasks[previousTask.Idx].Done {
-			// fmt.Printf("Worker %d finished Reduce task %d at time: %s \n",
-			// 	previousTask.WorkerIdx, previousTask.Idx, time.Now())
+			// fmt.Printf("Worker finished Reduce task %d\n", previousTask.Idx)
 			c.reduceTasks[previousTask.Idx].Done = true
 			c.remainReduceTask--
 		}
@@ -59,18 +58,18 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 	// Assign different tasks to workers
 	now := time.Now()
 	tenMinsAgo := now.Add(-10 * time.Second)
+	taskArgs.NMap = c.nMap
+	taskArgs.NReduce = c.nReduce
 	if c.remainMapTask > 0 {
 		// Assigning map tasks
 		for idx := range c.mapTasks {
 			task := &c.mapTasks[idx]
 			if !task.Done && task.StartAt.Before(tenMinsAgo) {
-				// fmt.Printf("Assigning Map task %d to the worker %d at time: %s \n",
-				// 	task.idx, previousTask.WorkerIdx, time.Now())
+				// fmt.Printf("Assigning Map task %d to the worker\n", task.idx)
 				task.StartAt = now
 				taskArgs.InputFile = task.inputFile
 				taskArgs.Type = Map
 				taskArgs.Idx = task.idx
-				taskArgs.NReduce = c.nReduce
 				return nil
 			}
 		}
@@ -79,12 +78,10 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 		for idx := range c.reduceTasks {
 			task := &c.reduceTasks[idx]
 			if !task.Done && task.StartAt.Before(tenMinsAgo) {
-				// fmt.Printf("Assigning Reduce task %d to the worker %d at time: %s\n",
-				// 	task.idx, previousTask.WorkerIdx, time.Now())
+				// fmt.Printf("Assigning Reduce task %d to the worker\n", task.idx)
 				task.StartAt = now
 				taskArgs.Type = Reduce
 				taskArgs.Idx = task.idx
-				taskArgs.NMap = c.nMap
 				return nil
 			}
 		}

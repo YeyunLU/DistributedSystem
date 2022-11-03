@@ -53,14 +53,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	previousTask := PreviousTask{Type: None} // TaskType.None
 	for {
 		taskArgs := TaskArgs{}
-		err := askForTask(previousTask, &taskArgs) // use & pointer to update value for the input param
-
-		// terminate if fail to communicate with the coordiator
-		// the possible reason would be we already terminated the coordiator
-		if err != nil {
-			break
-		}
-
+		askForTask(previousTask, &taskArgs) // use & pointer to update value for the input param
 		if taskArgs.Type == 0 { // Got a Map task
 			executeMapTask(taskArgs, mapf)
 			previousTask.Type = Map // Update to mark done
@@ -77,9 +70,10 @@ func Worker(mapf func(string, string) []KeyValue,
 }
 
 func askForTask(previousTask PreviousTask, taskArgs *TaskArgs) error {
-	ok := call("Coordinator.AssignTask", previousTask, &taskArgs)
-	if !ok {
+	ok := call("Coordinator.AssignTask", previousTask, taskArgs)
+	if !ok { // Assume that we already terminate the coordinator
 		log.Fatal("Failed to ask for a task")
+		os.Exit(0)
 	}
 	return nil
 }
@@ -128,10 +122,10 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	taskIdx := taskArgs.Idx
 	nMapTask := taskArgs.NMap
 	currMapIdx := 0
-	// fmt.Printf("Executing Reduce Task...\n")
-	counts := map[string]int{}
+	// fmt.Printf("Executing Reduce Task %d...\n", taskIdx)
+	kva := []KeyValue{} // local cache for all the key value pairs
+	reduceValues := map[string]string{}
 	for currMapIdx < nMapTask {
-		kva := []KeyValue{}
 		// Read input from intermidate files
 		fileName := "mr-" + strconv.Itoa(currMapIdx) + "-" + strconv.Itoa(taskIdx)
 		file, _ := os.Open(fileName)
@@ -144,31 +138,32 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 			}
 			kva = append(kva, kv)
 		}
-		// Reduce implementation
-		curIdx := 0
-		for curIdx < len(kva) {
-			tmpIdx := curIdx + 1
-			key := kva[curIdx].Key
-			value := kva[curIdx].Value
-			for tmpIdx < len(kva) && kva[tmpIdx].Key == key {
-				tmpIdx++
-			}
-			values := []string{}
-			for k := curIdx; k < tmpIdx; k++ {
-				values = append(values, value)
-			}
-			reduceValue, _ := strconv.Atoi(reducef(key, values))
-			counts[key] = counts[key] + reduceValue
-			curIdx = tmpIdx
-		}
 		currMapIdx++
+	}
+	sort.Sort(ByKey(kva))
+	// Reduce implementation
+	curIdx := 0
+	for curIdx < len(kva) {
+		tmpIdx := curIdx + 1
+		key := kva[curIdx].Key
+		value := kva[curIdx].Value
+		for tmpIdx < len(kva) && kva[tmpIdx].Key == key {
+			tmpIdx++
+		}
+		values := []string{}
+		for k := curIdx; k < tmpIdx; k++ {
+			values = append(values, value)
+		}
+		reduceValue := reducef(key, values)
+		reduceValues[key] = reduceValue
+		curIdx = tmpIdx
 	}
 	// Write results into output files
 	oname := "mr-out-" + strconv.Itoa(taskIdx)
 	ofile, _ := os.Create(oname)
 	defer ofile.Close()
-	for key, value := range counts {
-		fmt.Fprintf(ofile, "%v %v\n", key, strconv.Itoa(value))
+	for key, value := range reduceValues {
+		fmt.Fprintf(ofile, "%v %v\n", key, value)
 	}
 	return nil
 }
