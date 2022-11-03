@@ -54,7 +54,7 @@ func Worker(mapf func(string, string) []KeyValue,
 	for {
 		taskArgs := TaskArgs{}
 		askForTask(previousTask, &taskArgs) // use & pointer to update value for the input param
-		if taskArgs.Type == 0 { // Got a Map task
+		if taskArgs.Type == 0 {             // Got a Map task
 			executeMapTask(taskArgs, mapf)
 			previousTask.Type = Map // Update to mark done
 			previousTask.Idx = taskArgs.Idx
@@ -144,15 +144,13 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	// Reduce implementation
 	curIdx := 0
 	for curIdx < len(kva) {
-		tmpIdx := curIdx + 1
-		key := kva[curIdx].Key
-		value := kva[curIdx].Value
-		for tmpIdx < len(kva) && kva[tmpIdx].Key == key {
-			tmpIdx++
-		}
 		values := []string{}
-		for k := curIdx; k < tmpIdx; k++ {
+		tmpIdx := curIdx
+		key := kva[curIdx].Key
+		for tmpIdx < len(kva) && kva[tmpIdx].Key == key {
+			value := kva[tmpIdx].Value
 			values = append(values, value)
+			tmpIdx++
 		}
 		reduceValue := reducef(key, values)
 		reduceValues[key] = reduceValue

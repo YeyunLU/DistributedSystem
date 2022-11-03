@@ -1,29 +1,31 @@
 yeyunlu@YeyundeMacBook-Pro main % bash test-mr.sh
 *** Cannot find timeout command; proceeding without timeouts.
 *** Starting wc test.
-2022/11/03 13:56:59 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:06 rpc.Register: method "Done" has 1 input parameters; needs exactly three
 --- wc test: PASS
 *** Starting indexer test.
-2022/11/03 13:57:06 rpc.Register: method "Done" has 1 input parameters; needs exactly three
-mr-indexer-all mr-correct-indexer.txt differ: char 34, line 1
---- indexer output is not the same as mr-correct-indexer.txt
---- indexer test: FAIL
+2022/11/03 14:33:12 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+--- indexer test: PASS
 *** Starting map parallelism test.
-2022/11/03 13:57:09 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:16 rpc.Register: method "Done" has 1 input parameters; needs exactly three
 --- map parallelism test: PASS
 *** Starting reduce parallelism test.
-2022/11/03 13:57:16 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:23 rpc.Register: method "Done" has 1 input parameters; needs exactly three
 --- reduce parallelism test: PASS
 *** Starting job count test.
-2022/11/03 13:57:24 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:31 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:49 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
+2022/11/03 14:33:49 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
+2022/11/03 14:33:49 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
 --- map jobs ran incorrect number of times (9 != 8)
 --- job count test: FAIL
-2022/11/03 13:57:42 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
 *** Starting early exit test.
-2022/11/03 13:57:43 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:49 rpc.Register: method "Done" has 1 input parameters; needs exactly three
 --- early exit test: PASS
 *** Starting crash test.
-2022/11/03 13:57:49 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:33:55 rpc.Register: method "Done" has 1 input parameters; needs exactly three
+2022/11/03 14:34:39 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
+2022/11/03 14:34:40 dialing:dial unix /var/tmp/824-mr-501: connect: connection refused
 mr-crash-all mr-correct-crash.txt differ: char 3, line 1
 --- crash output is not the same as mr-correct-crash.txt
 --- crash test: FAIL
