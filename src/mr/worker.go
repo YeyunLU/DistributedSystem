@@ -10,6 +10,7 @@ import (
 	"os"
 	"sort"
 	"strconv"
+	"time"
 )
 
 //
@@ -52,9 +53,8 @@ func Worker(mapf func(string, string) []KeyValue,
 	// while true loop until there is no tasks left
 	previousTask := PreviousTask{Type: None} // TaskType.None
 	for {
-		taskArgs := TaskArgs{}
-		askForTask(previousTask, &taskArgs) // use & pointer to update value for the input param
-		if taskArgs.Type == 0 {             // Got a Map task
+		taskArgs := askForTask(previousTask) // use & pointer to update value for the input param
+		if taskArgs.Type == 0 {              // Got a Map task
 			executeMapTask(taskArgs, mapf)
 			previousTask.Type = Map // Update to mark done
 			previousTask.Idx = taskArgs.Idx
@@ -62,27 +62,31 @@ func Worker(mapf func(string, string) []KeyValue,
 			executeReduceTask(taskArgs, reducef)
 			previousTask.Type = Reduce // Update to mark done
 			previousTask.Idx = taskArgs.Idx
+		} else if taskArgs.Type == 2 { //Sleep to wait for others
+			// we need this state when there is remaining map task, but other workers are working on it
+			time.Sleep(500 * time.Millisecond) // sleep 0.5 s between 2 tasks
+			previousTask.Type = None
 		} else { // Got no tasks, exit
 			break
 		}
-		// time.Sleep(time.Second) // sleep 1 s between 2 tasks
 	}
 }
 
-func askForTask(previousTask PreviousTask, taskArgs *TaskArgs) error {
-	ok := call("Coordinator.AssignTask", previousTask, taskArgs)
+func askForTask(previousTask PreviousTask) TaskArgs {
+	taskArgs := TaskArgs{}
+	ok := call("Coordinator.AssignTask", previousTask, &taskArgs)
 	if !ok { // Assume that we already terminate the coordinator
-		log.Fatal("Failed to ask for a task")
-		os.Exit(0)
+		fmt.Println("Failed to ask for a task")
 	}
-	return nil
+	return taskArgs
 }
 
 func executeMapTask(taskArgs TaskArgs, mapf func(string, string) []KeyValue) error {
 
 	fileName := taskArgs.InputFile
 	mapTaskIdx := taskArgs.Idx
-	// fmt.Printf("Executing Map Task... Input File: %s \n", fileName)
+	// me := os.Getpid()
+	// fmt.Printf("Worker %d is executing Map Task... Input File: %s \n", me, fileName)
 
 	// Read content from the input file
 	file, _ := os.Open(fileName)
@@ -122,7 +126,8 @@ func executeReduceTask(taskArgs TaskArgs, reducef func(string, []string) string)
 	taskIdx := taskArgs.Idx
 	nMapTask := taskArgs.NMap
 	currMapIdx := 0
-	// fmt.Printf("Executing Reduce Task %d...\n", taskIdx)
+	// me := os.Getpid()
+	// fmt.Printf("Worker %d Executing Reduce Task %d...\n", me, taskIdx)
 	kva := []KeyValue{} // local cache for all the key value pairs
 	reduceValues := map[string]string{}
 	for currMapIdx < nMapTask {

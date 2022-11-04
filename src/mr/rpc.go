@@ -30,6 +30,7 @@ type TaskType int
 const (
 	Map TaskType = iota
 	Reduce
+	Sleep
 	None
 )
 

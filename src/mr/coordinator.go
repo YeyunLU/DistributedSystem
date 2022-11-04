@@ -53,7 +53,7 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 			c.reduceTasks[previousTask.Idx].Done = true
 			c.remainReduceTask--
 		}
-	}
+	} 
 
 	// Assign different tasks to workers
 	now := time.Now()
@@ -73,6 +73,8 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 				return nil
 			}
 		}
+		// Race condition, when there are still map tasks, but they are picked up by other workers
+		taskArgs.Type = Sleep
 	} else if c.remainReduceTask > 0 {
 		// Assigning reduce tasks
 		for idx := range c.reduceTasks {
@@ -85,6 +87,7 @@ func (c *Coordinator) AssignTask(previousTask PreviousTask, taskArgs *TaskArgs) 
 				return nil
 			}
 		}
+		taskArgs.Type = Sleep
 	} else {
 		// Terminate the workers
 		// println("Finished all the job, stop working")
@@ -108,10 +111,7 @@ func (c *Coordinator) Example(args *ExampleArgs, reply *ExampleReply) error {
 // start a thread that listens for RPCs from worker.go
 //
 func (c *Coordinator) server() {
-	e := rpc.Register(c)
-	if e != nil {
-		log.Fatal("register error:", e)
-	}
+	rpc.Register(c)
 	rpc.HandleHTTP()
 	//l, e := net.Listen("tcp", ":1234")
 	sockname := coordinatorSock()
