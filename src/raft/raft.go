@@ -50,6 +50,11 @@ type ApplyMsg struct {
 	SnapshotIndex int
 }
 
+type Log struct {
+	logIndex int
+	termIndex int
+} 
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -59,6 +64,18 @@ type Raft struct {
 	persister *Persister          // Object to hold this peer's persisted state
 	me        int                 // this peer's index into peers[]
 	dead      int32               // set by Kill()
+
+	// for all servers
+	currentTerm int
+	currentLeader int
+	votedFor int
+	log	[]Log
+	commitIndex int
+	lastApplied int
+
+	// for leaders
+	nextIndex []int
+	matchIndex []int
 
 	// Your data here (2A, 2B, 2C).
 	// Look at the paper's Figure 2 for a description of what
@@ -73,6 +90,8 @@ func (rf *Raft) GetState() (int, bool) {
 	var term int
 	var isleader bool
 	// Your code here (2A).
+	term = rf.currentTerm
+	isleader = rf.currentLeader == rf.me
 	return term, isleader
 }
 
@@ -143,6 +162,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
+	term int
+	candidateId int
+	lastLogIndex int
+	lastLogTerm int
 }
 
 //
@@ -151,6 +174,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
+	term int
+	voteGranted bool
 }
 
 //
@@ -158,6 +183,8 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
+
+
 }
 
 //
@@ -249,6 +276,20 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
+		
+		//check if receive heartbeat recenty
+
+
+		//start a new election
+		requestVoteReply := RequestVoteReply{}
+		lastLogEntry := rf.log[len(rf.log)-1]
+		requestVoteArgs := RequestVoteArgs{
+			candidateId: rf.me,
+			term: rf.currentTerm,
+			lastLogIndex: lastLogEntry.logIndex,
+			lastLogTerm: lastLogEntry.termIndex,
+		}
+		rf.sendRequestVote(rf.me, &requestVoteArgs ,&requestVoteReply)
 
 	}
 }
@@ -272,6 +313,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
+	rf.currentTerm = 1
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
