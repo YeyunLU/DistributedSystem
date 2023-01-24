@@ -1,0 +1,38 @@
+Random time: 552 ms
+Peers count: 3
+Random time: 552 ms
+Peers count: 3
+Random time: 564 ms
+Peers count: 3
+Test (2A): initial election ...
+--- FAIL: TestInitialElection2A (0.94s)
+    config.go:449: term 1 has 3 (>1) leaders
+Random time: 520 ms
+Peers count: 3
+Random time: 784 ms
+Peers count: 3
+Random time: 710 ms
+Peers count: 3
+Test (2A): election after network failure ...
+--- FAIL: TestReElection2A (1.02s)
+    config.go:449: term 1 has 3 (>1) leaders
+Random time: 513 ms
+Peers count: 7
+Random time: 542 ms
+Peers count: 7
+Random time: 598 ms
+Peers count: 7
+Random time: 677 ms
+Peers count: 7
+Random time: 538 ms
+Peers count: 7
+Random time: 642 ms
+Peers count: 7
+Random time: 774 ms
+Peers count: 7
+Test (2A): multiple elections ...
+--- FAIL: TestManyElections2A (7.52s)
+    config.go:460: expected one leader, got none
+FAIL
+exit status 1
+FAIL	6.824/raft	9.830s

@@ -19,13 +19,17 @@ package raft
 
 import (
 	//	"bytes"
+	"fmt"
+	"math/rand"
 	"sync"
 	"sync/atomic"
+
+	// "time"
+	"time"
 
 	//	"6.824/labgob"
 	"6.824/labrpc"
 )
-
 
 //
 // as each Raft peer becomes aware that successive log entries are
@@ -55,6 +59,14 @@ type Log struct {
 	termIndex int
 } 
 
+type State int
+
+const (
+	Leader State = iota
+	Candidate
+	Follower
+)
+
 //
 // A Go object implementing a single Raft peer.
 //
@@ -67,11 +79,14 @@ type Raft struct {
 
 	// for all servers
 	currentTerm int
-	currentLeader int
+	state State
 	votedFor int
+	voteCount int
 	log	[]Log
 	commitIndex int
 	lastApplied int
+	lastHeartBeat time.Time
+	electionTimeOut time.Duration
 
 	// for leaders
 	nextIndex []int
@@ -91,7 +106,7 @@ func (rf *Raft) GetState() (int, bool) {
 	var isleader bool
 	// Your code here (2A).
 	term = rf.currentTerm
-	isleader = rf.currentLeader == rf.me
+	isleader = (rf.state == 0)
 	return term, isleader
 }
 
@@ -162,10 +177,10 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 //
 type RequestVoteArgs struct {
 	// Your data here (2A, 2B).
-	term int
-	candidateId int
-	lastLogIndex int
-	lastLogTerm int
+	Term int
+	CandidateId int
+	LastLogIndex int
+	LastLogTerm int
 }
 
 //
@@ -174,8 +189,8 @@ type RequestVoteArgs struct {
 //
 type RequestVoteReply struct {
 	// Your data here (2A).
-	term int
-	voteGranted bool
+	Term int
+	VoteGranted bool
 }
 
 //
@@ -183,7 +198,18 @@ type RequestVoteReply struct {
 //
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
-
+	if args.Term < rf.currentTerm {
+		reply.VoteGranted = false
+		reply.Term = rf.currentTerm
+	} else {
+		rf.currentTerm = args.Term // update current term
+		reply.Term = args.Term
+		if rf.votedFor == -1 { // haven't voted for anyone
+			reply.VoteGranted = true
+		} else {
+			reply.VoteGranted = false
+		}
+	}
 
 }
 
@@ -276,22 +302,48 @@ func (rf *Raft) ticker() {
 		// Your code here to check if a leader election should
 		// be started and to randomize sleeping time using
 		// time.Sleep().
-		
+			
 		//check if receive heartbeat recenty
-
-
-		//start a new election
-		requestVoteReply := RequestVoteReply{}
-		lastLogEntry := rf.log[len(rf.log)-1]
-		requestVoteArgs := RequestVoteArgs{
-			candidateId: rf.me,
-			term: rf.currentTerm,
-			lastLogIndex: lastLogEntry.logIndex,
-			lastLogTerm: lastLogEntry.termIndex,
+		if time.Since(rf.lastHeartBeat) > rf.electionTimeOut {
+			//start a new election, send vote request to other peers
+			rf.mu.Lock()
+			rf.currentTerm += 1
+			rf.state = Candidate
+			requestVoteArgs := RequestVoteArgs{
+				CandidateId: rf.me,
+				Term: rf.currentTerm,
+			}
+			rf.voteCount = 0
+			rf.votedFor = rf.me
+			for idx, _ := range rf.peers {
+				if idx == rf.me {
+					rf.voteCount += 1
+					continue
+				}
+				// request vote to other peers concurrently
+				go func () {
+					requestVoteReply := RequestVoteReply{}
+					rf.sendRequestVote(rf.me, &requestVoteArgs ,&requestVoteReply)
+					if requestVoteReply.Term > rf.currentTerm {
+						rf.currentTerm = requestVoteReply.Term
+						rf.state = Follower
+					}
+					if requestVoteReply.VoteGranted == true {
+						rf.voteCount += 1
+					}
+				} ()
+			}
+			rf.mu.Unlock()
+			if(rf.voteCount >= len(rf.peers)/2) {
+				rf.state = Leader
+				break
+			} 
 		}
-		rf.sendRequestVote(rf.me, &requestVoteArgs ,&requestVoteReply)
 
+		// retry after 10 ms
+		time.Sleep(10 * time.Microsecond)
 	}
+
 }
 
 //
@@ -313,7 +365,16 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.me = me
 
 	// Your initialization code here (2A, 2B, 2C).
-	rf.currentTerm = 1
+	rf.currentTerm = 0
+	rf.commitIndex = 0
+	rf.lastApplied = 0
+	rf.state = Follower
+	rf.votedFor = -1
+	rf.lastHeartBeat = time.Now()
+	// timeout is set from 500 ms to 800 ms
+	rf.electionTimeOut = time.Duration(500 + rand.Intn(300)) * time.Millisecond 
+	fmt.Printf("Random time: %d ms\n",rf.electionTimeOut.Milliseconds())
+	fmt.Printf("Peers count: %d\n", len(rf.peers))
 
 	// initialize from state persisted before a crash
 	rf.readPersist(persister.ReadRaftState())
