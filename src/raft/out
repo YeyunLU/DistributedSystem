@@ -1,8 +1,9 @@
+yeyunlu@YeyundeMacBook-Pro raft % go test -run 2A -race
 Test (2A): initial election ...
-  ... Passed --   3.5  3 150109 30021468    0
+  ... Passed --   3.2  3   50   14864    0
 Test (2A): election after network failure ...
-  ... Passed --   6.0  3 540753 82927216    0
+  ... Passed --   5.1  3  114   24755    0
 Test (2A): multiple elections ...
-  ... Passed --   5.9  7 576972 92586678    0
+  ... Passed --   6.3  7  582  123380    0
 PASS
-ok  	6.824/raft	15.736s
+ok      6.824/raft      14.970s
