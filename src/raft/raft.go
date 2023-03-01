@@ -18,7 +18,6 @@ package raft
 //
 
 import (
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -129,8 +128,10 @@ type AppendEntriesArgs struct {
 }
 
 type AppendEntriesReply struct {
-	Term    int
-	Success bool
+	Term     int
+	Success  bool
+	PeerIdx  int
+	MatchIdx int
 }
 
 /*------------------- Initialization --------------------*/
@@ -263,7 +264,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if compareTwoLogEntry(rf.log[len(rf.log)-1], 
+	if compareTwoLogEntry(rf.log[len(rf.log)-1],
 		LogEntry{LogIdx: args.LastLogIndex, TermIdx: args.LastLogTerm}) < 0 {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
@@ -285,8 +286,17 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 }
 
 /*------------------- Append entries logic --------------------*/
-func (rf *Raft) sendAppendEntries(server int, args *AppendEntriesArgs, reply *AppendEntriesReply) bool {
+func (rf *Raft) sendAppendEntries(server int, leaderLogs []LogEntry, args *AppendEntriesArgs,
+	reply *AppendEntriesReply, commitCh chan<- AppendEntriesReply) bool {
+	args.Entries = leaderLogs[args.PrevLogIndex+1:]
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if reply.Success {
+		commitCh <- *reply
+	} else if args.PrevLogIndex > 0 { // skip recursively call for heartbeat
+		args.PrevLogIndex--
+		args.PrevLogTerm = rf.log[args.PrevLogIndex].TermIdx
+		go rf.sendAppendEntries(server, leaderLogs, args, reply, commitCh)
+	}
 	return ok
 }
 
@@ -340,6 +350,9 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	for i := 0; i < len(leaderLogs); i++ {
 		rf.log = append(rf.log, leaderLogs[i])
 	}
+
+	reply.PeerIdx = rf.me
+	reply.MatchIdx = rf.log[len(rf.log)-1].LogIdx
 
 	if args.LeaderCommit > rf.commitIdx {
 		rf.commitIdx = min(args.LeaderCommit, rf.log[len(rf.log)-1].LogIdx)
@@ -479,20 +492,14 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int, commitCh chan<- AppendEntri
 		LeaderId:     rf.me,
 		PrevLogIndex: prevLogIdx,
 		PrevLogTerm:  prevTerm,
-		Entries:      rf.log[prevLogIdx+1:],
+		Entries:      []LogEntry{},
 		LeaderCommit: rf.commitIdx,
 	}
+	leaderLogs := rf.log
 	rf.mu.Unlock()
 	go func(followerIdx int) {
 		reply := AppendEntriesReply{}
-		rf.sendAppendEntries(followerIdx, &args, &reply)
-		if reply.Success {
-			commitCh <- reply
-		} else if args.PrevLogIndex > 0 { // skip recursively call for heartbeat
-			rf.nextIdx[peerIdx]--
-			fmt.Println("Recursive call send log entry")
-			go rf.sendOutLogEntryRequests(followerIdx, commitCh)
-		}
+		rf.sendAppendEntries(followerIdx, leaderLogs, &args, &reply, commitCh)
 	}(peerIdx)
 }
 
@@ -502,8 +509,10 @@ func (rf *Raft) waitForCommits(commitCh <-chan AppendEntriesReply) {
 	logCommitted := 1
 	for i := 0; i < len(rf.peers); i++ {
 		select {
-		case <-commitCh:
+		case reply := <-commitCh:
 			logCommitted++
+			rf.matchIdx[reply.PeerIdx] = reply.MatchIdx
+			rf.nextIdx[reply.PeerIdx] = reply.MatchIdx + 1
 			if logCommitted > len(rf.peers)/2 {
 				rf.ApplyCommits()
 				return
