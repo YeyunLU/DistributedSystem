@@ -18,6 +18,7 @@ package raft
 //
 
 import (
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -262,7 +263,8 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	if args.Term < rf.currentTerm {
+	if compareTwoLogEntry(rf.log[len(rf.log)-1], 
+		LogEntry{LogIdx: args.LastLogIndex, TermIdx: args.LastLogTerm}) < 0 {
 		reply.VoteGranted = false
 		reply.Term = rf.currentTerm
 		return
@@ -296,6 +298,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	if args.Term < rf.currentTerm {
 		reply.Success = false
 		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
 		return
 	}
 	// Convert to follower if receive heartbeat from leader with higher term
@@ -487,6 +490,7 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int, commitCh chan<- AppendEntri
 			commitCh <- reply
 		} else if args.PrevLogIndex > 0 { // skip recursively call for heartbeat
 			rf.nextIdx[peerIdx]--
+			fmt.Println("Recursive call send log entry")
 			go rf.sendOutLogEntryRequests(followerIdx, commitCh)
 		}
 	}(peerIdx)
@@ -537,9 +541,12 @@ func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 	rf.resetTimer()
 	rf.currentTerm += 1
 	rf.votedFor = rf.me
+	lastLogEntry := rf.log[len(rf.log)-1]
 	args := RequestVoteArgs{
-		CandidateId: rf.me,
-		Term:        rf.currentTerm,
+		CandidateId:  rf.me,
+		Term:         rf.currentTerm,
+		LastLogIndex: lastLogEntry.LogIdx,
+		LastLogTerm:  lastLogEntry.TermIdx,
 	}
 	rf.mu.Unlock()
 	for idx := range rf.peers {
@@ -591,5 +598,19 @@ func min(a, b int) int {
 		return a
 	} else {
 		return b
+	}
+}
+
+func compareTwoLogEntry(a, b LogEntry) int {
+	if a.TermIdx < b.TermIdx {
+		return -1
+	} else if a.TermIdx > b.TermIdx {
+		return 1
+	} else {
+		if a.LogIdx < b.LogIdx {
+			return -1
+		} else {
+			return 1
+		}
 	}
 }
