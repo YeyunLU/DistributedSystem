@@ -165,15 +165,15 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.readPersist(persister.ReadRaftState())
 
 	// start ticker goroutine to start elections
-	go rf.ticker()
+	go rf.raftMain()
 
 	return rf
 }
 
 /*------------------- Main Function --------------------*/
-// The ticker go routine starts a new election if this peer hasn't received
+// The raftMain go routine starts a new election if this peer hasn't received
 // heartsbeats recently.
-func (rf *Raft) ticker() {
+func (rf *Raft) raftMain() {
 	for !rf.killed() {
 
 		// Your code here to check if a leader election should
@@ -186,8 +186,8 @@ func (rf *Raft) ticker() {
 
 		switch state {
 		case Leader:
-			rf.serverAsLeader()
-			time.Sleep(time.Duration(120) * time.Millisecond)
+			rf.serveAsLeader()
+			time.Sleep(time.Duration(100) * time.Millisecond)
 		case Candidate:
 			rf.serveAsCandidate()
 		case Follower:
@@ -209,21 +209,13 @@ func (rf *Raft) GetState() (int, bool) {
 }
 
 /*------------------- Serve as Different States --------------------*/
-func (rf *Raft) serverAsLeader() {
-	commitCh := make(chan AppendEntriesReply, len(rf.peers))
+func (rf *Raft) serveAsLeader() {
 	for idx := range rf.peers {
 		if idx == rf.me {
 			continue
 		}
-		rf.sendOutLogEntryRequests(idx, commitCh)
+		rf.sendOutLogEntryRequests(idx)
 	}
-	rf.mu.Lock()
-	logLen := len(rf.log)
-	rf.mu.Unlock()
-	if logLen > 1 { // skip wait for heartbeat, there is one dummy log in initialization
-		rf.waitForCommits(commitCh)
-	}
-
 }
 
 func (rf *Raft) serveAsFollower() {
@@ -233,7 +225,6 @@ func (rf *Raft) serveAsFollower() {
 		rf.state = Candidate
 		return
 	}
-	time.Sleep(time.Duration(10) * time.Millisecond)
 }
 
 func (rf *Raft) serveAsCandidate() {
@@ -252,7 +243,7 @@ func (rf *Raft) serveAsCandidate() {
 }
 
 /*------------------- Requset vote logic --------------------*/
-// Send out all vote request 
+// Send out all vote request
 func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 	rf.mu.Lock()
 	rf.resetTimer()
@@ -279,11 +270,13 @@ func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 		}(idx)
 	}
 }
+
 // RPC call
 func (rf *Raft) sendRequestVote(server int, args *RequestVoteArgs, reply *RequestVoteReply) bool {
 	ok := rf.peers[server].Call("Raft.RequestVote", args, reply)
 	return ok
 }
+
 // RPC handler
 func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	// Your code here (2A, 2B).
@@ -312,7 +305,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 
 /*------------------- Append entries logic --------------------*/
 // Send out all log entry request
-func (rf *Raft) sendOutLogEntryRequests(peerIdx int, commitCh chan<- AppendEntriesReply) {
+func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 	rf.mu.Lock()
 	prevLogIdx := rf.nextIdx[peerIdx] - 1
 	prevTerm := rf.log[prevLogIdx].TermIdx
@@ -327,31 +320,34 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int, commitCh chan<- AppendEntri
 	leaderLogs := rf.log
 	rf.mu.Unlock()
 	go func(followerIdx int) {
-		rf.sendAppendEntries(followerIdx, leaderLogs, &args, commitCh)
+		rf.sendAppendEntries(followerIdx, leaderLogs, &args)
 	}(peerIdx)
 }
+
 // RPC call
-func (rf *Raft) sendAppendEntries(server int, leaderLogs []LogEntry, args *AppendEntriesArgs,
-	commitCh chan<- AppendEntriesReply) bool {
+func (rf *Raft) sendAppendEntries(server int, leaderLogs []LogEntry, args *AppendEntriesArgs) bool {
 	args.Entries = leaderLogs[args.PrevLogIndex+1:]
 	reply := &AppendEntriesReply{}
 	ok := rf.peers[server].Call("Raft.AppendEntries", args, reply)
+	if len(args.Entries) == 0 || !ok { // skip heartbeat or failed connection
+		return ok
+	}
 	if reply.Success {
 		rf.mu.Lock()
 		rf.matchIdx[server] = args.PrevLogIndex + len(args.Entries)
 		rf.nextIdx[server] = rf.matchIdx[server] + 1
 		rf.mu.Unlock()
-		commitCh <- *reply
-	} else if args.PrevLogIndex > 0 { // skip recursively call for heartbeat
-		args.PrevLogIndex--
-		args.PrevLogTerm = rf.log[args.PrevLogIndex].TermIdx
-		go rf.sendAppendEntries(server, leaderLogs, args, commitCh)
+		rf.CheckCommits()
+	} else {
+		rf.mu.Lock()
+		rf.nextIdx[server]--
+		rf.mu.Unlock()
 	}
 	return ok
 }
+
 // RPC handler
 func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
-	// Heartbeat Logic
 	rf.mu.Lock()
 	// Reply false if term < currentTerm
 	if args.Term < rf.currentTerm {
@@ -370,41 +366,42 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	prevLogIdx := args.PrevLogIndex
 	leaderLogs := args.Entries
 
-	if len(leaderLogs) == 0 { // nothing to append, just heartbeat
-		reply.Success = false
-		rf.mu.Unlock()
-		return
-	}
+	// Append log entries logic
+	if len(leaderLogs) > 0 {
+		// Reply false if log doesn't contain an entry at PrevLogIndex whose term matches prevLogTerm
+		if rf.log[prevLogIdx].TermIdx != args.PrevLogTerm {
+			reply.Success = false
+			rf.mu.Unlock()
+			return
+		}
+		nextIdx := prevLogIdx + 1
+		idx := 0
 
-	// Reply false if log doesn't contain an entry at PrevLogIndex whose term matches prevLogTerm
-	if rf.log[prevLogIdx].TermIdx != args.PrevLogTerm {
-		reply.Success = false
-		rf.mu.Unlock()
-		return
-	}
-	reply.Success = true
-	nextIdx := prevLogIdx + 1
-	idx := 0
+		// Delete the existing entry and all that follow it
+		existingEntries := rf.log[nextIdx:]
+		for idx := 0; idx < min(len(leaderLogs), len(existingEntries)); idx++ {
+			if existingEntries[idx] != leaderLogs[idx] {
+				break
+			}
+		}
+		rf.log = rf.log[:nextIdx+idx]
 
-	// Delete the existing entry and all that follow it
-	existingEntries := rf.log[nextIdx:]
-	for idx := 0; idx < min(len(leaderLogs), len(existingEntries)); idx++ {
-		if existingEntries[idx] != leaderLogs[idx] {
-			break
+		// Append any new entries not already in the log
+		for i := 0; i < len(leaderLogs); i++ {
+			rf.log = append(rf.log, leaderLogs[i])
 		}
 	}
-	rf.log = rf.log[:nextIdx+idx]
 
-	// Append any new entries not already in the log
-	for i := 0; i < len(leaderLogs); i++ {
-		rf.log = append(rf.log, leaderLogs[i])
-	}
-
+	reply.Success = true
+	// Apply commits if need
 	if args.LeaderCommit > rf.commitIdx {
 		rf.commitIdx = min(args.LeaderCommit, rf.log[len(rf.log)-1].LogIdx)
 		rf.mu.Unlock()
 		rf.ApplyCommits()
+		return
 	}
+
+	rf.mu.Unlock()
 }
 
 /*------------------- Persist logic --------------------*/
@@ -495,7 +492,6 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.nextIdx[rf.me]++
 	rf.matchIdx[rf.me] = index
 	rf.log = append(rf.log, LogEntry{LogIdx: index, TermIdx: term, Command: command})
-	rf.commitIdx = index
 	rf.mu.Unlock()
 	return index, term, isLeader
 }
@@ -528,44 +524,42 @@ func (rf *Raft) resetTimer() {
 	rf.electionTimeOut = time.Duration(300+rand.Intn(200)) * time.Millisecond
 }
 
-
-// Collect commit info helper
-func (rf *Raft) waitForCommits(commitCh <-chan AppendEntriesReply) {
-	timeout := time.Duration(500 * time.Millisecond)
-	logCommitted := 1
-	for i := 0; i < len(rf.peers); i++ {
-		select {
-		case <-commitCh:
-			logCommitted++
-			if logCommitted > len(rf.peers)/2 {
-				rf.ApplyCommits()
-				return
+func (rf *Raft) CheckCommits() {
+	rf.mu.Lock()
+	for logIdx := len(rf.log) - 1; logIdx > rf.commitIdx; logIdx-- {
+		count := 0
+		for serverIdx := range rf.peers {
+			if rf.matchIdx[serverIdx] >= logIdx {
+				count++
+				if count > len(rf.peers)/2 {
+					rf.commitIdx = logIdx
+					rf.mu.Unlock()
+					rf.ApplyCommits()
+					return
+				}
 			}
-		case <-time.After(timeout):
-			return
 		}
 	}
+	rf.mu.Unlock()
 }
 
 // Apply commits helper
 func (rf *Raft) ApplyCommits() {
 	// apply commits in target server
 	rf.mu.Lock()
-	lastApplied := rf.lastApplied
-	rf.mu.Unlock()
+	defer rf.mu.Unlock()
+	currentApply := rf.lastApplied
 	commitIdx := rf.commitIdx
-	for lastApplied < commitIdx {
-		lastApplied++
-		logEntry := rf.log[lastApplied]
+	for currentApply < commitIdx {
+		currentApply++
+		logEntry := rf.log[currentApply]
 		rf.applyCh <- ApplyMsg{
 			CommandValid: true,
 			Command:      logEntry.Command,
 			CommandIndex: logEntry.LogIdx,
 		}
 	}
-	rf.mu.Lock()
-	rf.lastApplied = lastApplied
-	rf.mu.Unlock()
+	rf.lastApplied = currentApply
 }
 
 // Collect vote result helper

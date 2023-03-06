@@ -1,8 +1,11 @@
 yeyunlu@YeyundeMacBook-Pro raft % go test -run 2B -race
 Test (2B): basic agreement ...
-  ... Passed --   0.9  3   14    3518    3
+  ... Passed --   1.0  3   16    4350    3
 Test (2B): RPC byte count ...
-  ... Passed --   1.9  3   28  107798   11
+  ... Passed --   2.6  3   48  113802   11
 Test (2B): agreement after follower reconnects ...
-^Csignal: interrupt
-FAIL    6.824/raft      11.448s
+2023/03/05 16:37:05 2: log map[1:101]; server map[1:101 2:102 3:103 4:104 5:105]
+2023/03/05 16:37:05 2: log map[1:101]; server map[1:101 2:102 3:103 4:104 5:105 6:106]
+2023/03/05 16:37:05 apply error: commit index=2 server=2 106 != server=1 102
+exit status 1
+FAIL    6.824/raft      8.819s
