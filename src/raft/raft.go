@@ -16,15 +16,17 @@ package raft
 //   should send an ApplyMsg to the service (or tester)
 //   in the same server.
 //
-
 import (
+	"bytes"
+	// "fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
 
+	"log"
 	"time"
 
-	//	"6.824/labgob"
+	"6.824/labgob"
 	"6.824/labrpc"
 )
 
@@ -165,6 +167,7 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = []LogEntry{{LogIdx: 0, TermIdx: 0}} // placeholder to make the index easier
 	// so that log idx start at 1
 	rf.resetTimer()
+	rf.persist()
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
@@ -235,7 +238,6 @@ func (rf *Raft) serveAsFollower() {
 }
 
 func (rf *Raft) serveAsCandidate() {
-	// new term, reset timer, vote for self
 	rf.mu.Lock()
 	lastHeard := rf.lastHeard
 	timeout := rf.electionTimeOut
@@ -252,8 +254,10 @@ func (rf *Raft) serveAsCandidate() {
 // Send out all vote request
 func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 	rf.mu.Lock()
+	// new term, reset timer, vote for self
 	rf.currentTerm++
 	rf.votedFor = rf.me
+	rf.persist()
 	lastLogEntry := rf.log[len(rf.log)-1]
 	args := RequestVoteArgs{
 		CandidateId:  rf.me,
@@ -274,7 +278,6 @@ func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 			}
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
-				// fmt.Printf("Candidate %d step down to follower at term: %d by server %d\n", rf.me, rf.currentTerm, peerIdx)
 				rf.stepDownToFollower(-1, reply.Term)
 				rf.resetTimer()
 			}
@@ -313,6 +316,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 		compareTwoLogEntry(rf.log[len(rf.log)-1], candidateLog) < 1 {
 		rf.votedFor = args.CandidateId
 		reply.VoteGranted = true
+		rf.persist()
 	}
 }
 
@@ -406,13 +410,18 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 //
 func (rf *Raft) persist() {
 	// Your code here (2C).
-	// Example:
-	// w := new(bytes.Buffer)
-	// e := labgob.NewEncoder(w)
-	// e.Encode(rf.xxx)
-	// e.Encode(rf.yyy)
-	// data := w.Bytes()
-	// rf.persister.SaveRaftState(data)
+	// Persistent items
+	// 1. currentTerm
+	// 2. votedFor
+	// 3. log[]
+
+	buffer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(buffer)
+	encoder.Encode(rf.currentTerm)
+	encoder.Encode(rf.votedFor)
+	encoder.Encode(rf.log)
+	data := buffer.Bytes()
+	rf.persister.SaveRaftState(data)
 }
 
 // restore previously persisted state.
@@ -422,18 +431,22 @@ func (rf *Raft) readPersist(data []byte) {
 		return
 	}
 	// Your code here (2C).
-	// Example:
-	// r := bytes.NewBuffer(data)
-	// d := labgob.NewDecoder(r)
-	// var xxx
-	// var yyy
-	// if d.Decode(&xxx) != nil ||
-	//    d.Decode(&yyy) != nil {
-	//   error...
-	// } else {
-	//   rf.xxx = xxx
-	//   rf.yyy = yyy
-	// }
+
+	buffer := bytes.NewBuffer(data)
+	decoder := labgob.NewDecoder(buffer)
+	var currentTerm int
+	var votedFor int
+	var logs []LogEntry
+	if decoder.Decode(&currentTerm) != nil ||
+		decoder.Decode(&votedFor) != nil ||
+		decoder.Decode(&logs) != nil {
+		log.Fatalf("Failed to decode persistent data")
+	} else {
+		// fmt.Printf("Current term: %d, votedFor %d, logs %d\n", currentTerm, votedFor, logs)
+		rf.currentTerm = currentTerm
+		rf.votedFor = votedFor
+		rf.log = logs
+	}
 }
 
 /*------------------- Snapshot logic --------------------*/
@@ -484,6 +497,7 @@ func (rf *Raft) Start(command interface{}) (int, int, bool) {
 	rf.nextIdx[rf.me]++
 	rf.matchIdx[rf.me] = index
 	rf.log = append(rf.log, LogEntry{LogIdx: index, TermIdx: term, Command: command})
+	rf.persist()
 	rf.mu.Unlock()
 	rf.serveAsLeader()
 	return index, term, isLeader
@@ -561,7 +575,7 @@ func (rf *Raft) collectVoteResults(
 			voteGranted++
 			if voteGranted > len(rf.peers)/2 { // win election
 				rf.mu.Lock()
-				rf.state = Leader 
+				rf.state = Leader
 				rf.initializeLeader()
 				rf.mu.Unlock()
 				return
@@ -591,6 +605,7 @@ func (rf *Raft) stepDownToFollower(votedFor int, updatedTerm int) {
 	if updatedTerm > rf.currentTerm {
 		rf.currentTerm = updatedTerm
 	}
+	rf.persist()
 }
 
 func (rf *Raft) checkAndAppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
@@ -610,6 +625,8 @@ func (rf *Raft) checkAndAppendEntries(args *AppendEntriesArgs, reply *AppendEntr
 	for i := 0; i < len(leaderLogs); i++ {
 		rf.log = append(rf.log, leaderLogs[i])
 	}
+
+	rf.persist()
 }
 
 func min(a, b int) int {
