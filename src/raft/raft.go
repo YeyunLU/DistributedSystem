@@ -18,7 +18,6 @@ package raft
 //
 import (
 	"bytes"
-	// "fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -167,7 +166,6 @@ func Make(peers []*labrpc.ClientEnd, me int,
 	rf.log = []LogEntry{{LogIdx: 0, TermIdx: 0}} // placeholder to make the index easier
 	// so that log idx start at 1
 	rf.resetTimer()
-	rf.persist()
 	rf.applyCh = applyCh
 
 	// initialize from state persisted before a crash
@@ -354,7 +352,7 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 			rf.matchIdx[peerIdx] = args.PrevLogIndex + len(args.Entries)
 			rf.nextIdx[peerIdx] = rf.matchIdx[peerIdx] + 1
 			rf.checkCommits()
-		} else {
+		} else if rf.nextIdx[peerIdx] > 1 { // prevent negative idx for prevLogIdx
 			rf.nextIdx[peerIdx]--
 		}
 	}
@@ -427,11 +425,10 @@ func (rf *Raft) persist() {
 // restore previously persisted state.
 //
 func (rf *Raft) readPersist(data []byte) {
-	if data == nil || len(data) < 1 { // bootstrap without any state?
+	if data == nil || len(data) == 0 {
 		return
 	}
 	// Your code here (2C).
-
 	buffer := bytes.NewBuffer(data)
 	decoder := labgob.NewDecoder(buffer)
 	var currentTerm int
@@ -442,7 +439,6 @@ func (rf *Raft) readPersist(data []byte) {
 		decoder.Decode(&logs) != nil {
 		log.Fatalf("Failed to decode persistent data")
 	} else {
-		// fmt.Printf("Current term: %d, votedFor %d, logs %d\n", currentTerm, votedFor, logs)
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = logs
