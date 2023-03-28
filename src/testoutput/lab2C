@@ -1,22 +1,19 @@
 yeyunlu@YeyundeMacBook-Pro raft % go test -run 2C -race
 Test (2C): basic persistence ...
-  ... Passed --   4.4  3  136   32948    6
+  ... Passed --   4.5  3  128   33646    6
 Test (2C): more persistence ...
-  ... Passed --  29.5  5 2459  527827   16
+  ... Passed --  22.3  5 1800  410906   16
 Test (2C): partitioned leader and one follower crash, leader restarts ...
-  ... Passed --   1.9  3   44   11040    4
+  ... Passed --   2.8  3   46   12354    4
 Test (2C): Figure 8 ...
-  ... Passed --  29.4  5  636  138230   22
+  ... Passed --  27.4  5  740  172163   33
 Test (2C): unreliable agreement ...
-  ... Passed --   7.2  5 1384  441297  246
+  ... Passed --   5.6  5 1304  454498  246
 Test (2C): Figure 8 (unreliable) ...
---- FAIL: TestFigure8Unreliable2C (53.98s)
-    config.go:609: one(2474) failed to reach agreement
+  ... Passed --  37.3  5 12309 28256425  113
 Test (2C): churn ...
---- FAIL: TestReliableChurn2C (26.73s)
-    config.go:609: one(2698039688081093182) failed to reach agreement
+  ... Passed --  16.4  5 5320 10827450 1048
 Test (2C): unreliable churn ...
-  ... Passed --  24.4  5 3013 2804362  410
-FAIL
-exit status 1
-FAIL    6.824/raft      177.751s
+  ... Passed --  16.3  5 3640 2310421  653
+PASS
+ok      6.824/raft      132.779s

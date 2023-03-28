@@ -137,6 +137,10 @@ type AppendEntriesArgs struct {
 type AppendEntriesReply struct {
 	Term    int
 	Success bool
+
+	XTerm  int // term in the conflicting entry
+	XIndex int // index of first entry with that term
+	XLen   int // log length
 }
 
 /*------------------- Initialization --------------------*/
@@ -353,7 +357,16 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 			rf.nextIdx[peerIdx] = rf.matchIdx[peerIdx] + 1
 			rf.checkCommits()
 		} else if rf.nextIdx[peerIdx] > 1 { // prevent negative idx for prevLogIdx
-			rf.nextIdx[peerIdx]--
+			if reply.XLen != 0 { // follower's log is too short
+				rf.nextIdx[peerIdx] = reply.XLen
+			} else {
+				lastIdxOfXTerm := getLastLogIdxOfXTerm(rf.log, reply.XTerm)
+				if lastIdxOfXTerm > 0 { // leader has XTerm
+					rf.nextIdx[peerIdx] = lastIdxOfXTerm + 1
+				} else { // leader doesn't have XTerm
+					rf.nextIdx[peerIdx] = reply.XIndex
+				}
+			}
 		}
 	}
 	rf.mu.Unlock()
@@ -374,9 +387,19 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	rf.resetTimer()
 
-	// Failed because of mismatched log
-	if args.PrevLogIndex >= len(rf.log) ||
-		rf.log[args.PrevLogIndex].TermIdx != args.PrevLogTerm {
+	// Failed because of mismatched log, update XTerm, XIndex and XLen before return
+	if args.PrevLogIndex >= len(rf.log) {
+		reply.XLen = rf.log[len(rf.log)-1].LogIdx + 1
+		return
+	}
+	if rf.log[args.PrevLogIndex].TermIdx != args.PrevLogTerm {
+		reply.XTerm = rf.log[args.PrevLogIndex].TermIdx
+		for i := args.PrevLogIndex; i >= 0; i-- {
+			reply.XIndex = rf.log[i].LogIdx
+			if rf.log[i].TermIdx != reply.XTerm {
+				break
+			}
+		}
 		return
 	}
 
@@ -647,4 +670,15 @@ func compareTwoLogEntry(a, b LogEntry) int {
 			return 0
 		}
 	}
+}
+
+func getLastLogIdxOfXTerm(log []LogEntry, term int) int {
+	// return -1 if leader doesn't has X term
+	// return last idx if has X term
+	for i := len(log) - 1; i >= 0; i-- {
+		if log[i].TermIdx == term {
+			return log[i].LogIdx
+		}
+	}
+	return -1
 }
