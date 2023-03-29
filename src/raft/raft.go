@@ -18,6 +18,7 @@ package raft
 //
 import (
 	"bytes"
+	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -141,6 +142,19 @@ type AppendEntriesReply struct {
 	XTerm  int // term in the conflicting entry
 	XIndex int // index of first entry with that term
 	XLen   int // log length
+}
+
+type InstallSnapshotArgs struct {
+	Term              int
+	LeaderId          int
+	LastIncludedIndex int
+	LastIncludedTerm  int
+	data              []byte
+	done              bool
+}
+
+type InstallSnapshotReply struct {
+	Term int
 }
 
 /*------------------- Initialization --------------------*/
@@ -469,9 +483,40 @@ func (rf *Raft) readPersist(data []byte) {
 }
 
 /*------------------- Snapshot logic --------------------*/
+//
+// Send out RPC requests from leader
+func (rf *Raft) sendOutInstallSnapshotRequests() {
+	// check if a follower is lag behind
+	followerIdx := 0
+	// send out install snapshot request
+	args := InstallSnapshotArgs{
+		Term:     rf.currentTerm,
+		LeaderId: rf.me,
+		// LastIncludedIndex
+		// LastIncludedTerm
+		// data
+		done: true,
+	}
+	reply := InstallSnapshotReply{}
+	rf.sendInstallSnapshot(followerIdx, &args, &reply)
+}
+
+// RPC caller
+func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply *InstallSnapshotReply) bool {
+	ok := rf.peers[server].Call("Raft.InstallSnapshot", args, reply)
+	return ok
+}
+
+// RPC handler
+func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	if args.Term < rf.currentTerm {
+		reply.Term = rf.currentTerm
+		return
+	}
+}
+
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
 // have more recent info since it communicate the snapshot on applyCh.
-//
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 
 	// Your code here (2D).
@@ -485,7 +530,11 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
-
+	// trim log
+	dummyHead := []LogEntry{rf.log[0]}
+	rf.log = rf.log[index+1:]
+	rf.log = append(dummyHead, rf.log...)
+	// TODO: how to deal with index out of boundary after trim?
 }
 
 //
