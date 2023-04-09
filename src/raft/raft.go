@@ -18,7 +18,6 @@ package raft
 //
 import (
 	"bytes"
-	"fmt"
 	"math/rand"
 	"sync"
 	"sync/atomic"
@@ -84,15 +83,18 @@ type Raft struct {
 	dead      int32               // set by Kill()
 
 	// for all servers
-	currentTerm     int
-	state           State
-	votedFor        int
-	log             []LogEntry
-	commitIdx       int
-	lastApplied     int
-	lastHeard       time.Time
-	electionTimeOut time.Duration
-	applyCh         chan ApplyMsg
+	currentTerm       int
+	state             State
+	votedFor          int
+	log               []LogEntry
+	commitIdx         int
+	lastApplied       int
+	lastHeard         time.Time
+	lastIncludedIndex int
+	lastIncludedTerm  int
+	electionTimeOut   time.Duration
+	applyCh           chan ApplyMsg
+	snaptshot         []byte
 
 	// for leaders
 	nextIdx  []int
@@ -455,6 +457,8 @@ func (rf *Raft) persist() {
 	encoder.Encode(rf.currentTerm)
 	encoder.Encode(rf.votedFor)
 	encoder.Encode(rf.log)
+	encoder.Encode(rf.lastIncludedIndex)
+	encoder.Encode(rf.lastIncludedTerm)
 	data := buffer.Bytes()
 	rf.persister.SaveRaftState(data)
 }
@@ -468,34 +472,37 @@ func (rf *Raft) readPersist(data []byte) {
 	// Your code here (2C).
 	buffer := bytes.NewBuffer(data)
 	decoder := labgob.NewDecoder(buffer)
-	var currentTerm int
-	var votedFor int
+	var currentTerm, votedFor, lastIncludedIndex, lastIdxOfXTerm int
+
 	var logs []LogEntry
 	if decoder.Decode(&currentTerm) != nil ||
 		decoder.Decode(&votedFor) != nil ||
-		decoder.Decode(&logs) != nil {
+		decoder.Decode(&logs) != nil ||
+		decoder.Decode(&lastIncludedIndex) != nil ||
+		decoder.Decode(&lastIdxOfXTerm) != nil {
 		log.Fatalf("Failed to decode persistent data")
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = logs
+		rf.lastIncludedIndex = lastIncludedIndex
+		rf.lastIncludedTerm = lastIdxOfXTerm
 	}
 }
 
 /*------------------- Snapshot logic --------------------*/
 //
 // Send out RPC requests from leader
-func (rf *Raft) sendOutInstallSnapshotRequests() {
-	// check if a follower is lag behind
-	followerIdx := 0
+func (rf *Raft) sendOutInstallSnapshotRequests(followerIdx int) {
 	// send out install snapshot request
 	args := InstallSnapshotArgs{
-		Term:     rf.currentTerm,
-		LeaderId: rf.me,
-		// LastIncludedIndex
-		// LastIncludedTerm
-		// data
-		done: true,
+		LeaderId:          rf.me,
+		data:              rf.snaptshot,
+		Term:              rf.currentTerm,
+		LastIncludedIndex: rf.lastIncludedIndex,
+		LastIncludedTerm:  rf.lastIncludedTerm,
+		// offset
+		// done
 	}
 	reply := InstallSnapshotReply{}
 	rf.sendInstallSnapshot(followerIdx, &args, &reply)
@@ -520,6 +527,7 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int, snapshot []byte) bool {
 
 	// Your code here (2D).
+	// Conditionally insatll snapshot in follower
 
 	return true
 }
@@ -530,11 +538,14 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 // that index. Raft should now trim its log as much as possible.
 func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+	rf.lastIncludedIndex = 0
+	rf.lastIncludedTerm = 0
 	// trim log
-	dummyHead := []LogEntry{rf.log[0]}
-	rf.log = rf.log[index+1:]
-	rf.log = append(dummyHead, rf.log...)
-	// TODO: how to deal with index out of boundary after trim?
+	// dummyHead := []LogEntry{rf.log[0]}
+	// rf.log = rf.log[index+1:]
+	// rf.log = append(dummyHead, rf.log...)
 }
 
 //
@@ -619,18 +630,15 @@ func (rf *Raft) checkCommits() {
 // Apply commits helper
 func (rf *Raft) applyCommits() {
 	// apply commits in target server
-	currentApply := rf.lastApplied
-	commitIdx := rf.commitIdx
-	for currentApply < commitIdx {
-		currentApply++
-		logEntry := rf.log[currentApply]
-		rf.applyCh <- ApplyMsg{
+	for rf.lastApplied < rf.commitIdx {
+		rf.lastApplied++
+		msg := ApplyMsg {
 			CommandValid: true,
-			Command:      logEntry.Command,
-			CommandIndex: logEntry.LogIdx,
+			Command:      rf.log[rf.lastApplied].Command,
+			CommandIndex: rf.log[rf.lastApplied].LogIdx,
 		}
+		rf.applyCh <- msg
 	}
-	rf.lastApplied = currentApply
 }
 
 // Collect vote result helper
