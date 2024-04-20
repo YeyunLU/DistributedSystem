@@ -94,7 +94,9 @@ type Raft struct {
 	lastIncludedTerm  int
 	electionTimeOut   time.Duration
 	applyCh           chan ApplyMsg
-	snaptshot         []byte
+	data              []byte
+	offset            int
+	done              bool
 
 	// for leaders
 	nextIdx  []int
@@ -141,9 +143,22 @@ type AppendEntriesReply struct {
 	Term    int
 	Success bool
 
-	XTerm  int // term in the conflicting entry
-	XIndex int // index of first entry with that term
-	XLen   int // log length
+	// log length
+	// F: 4
+	// L: 4 [6] 6
+	XLen int
+
+	// term in the conflicting entry
+	// example:
+	// F:  4  4  6
+	// L: [4] 6  6
+	// XTerm = 4, use leader's last entry for XTerm
+	XTerm int
+
+	// index of first entry with XTerm
+	// F: 4 [5] 5
+	// L: 4 [6] 6
+	XIndex int
 }
 
 type InstallSnapshotArgs struct {
@@ -151,8 +166,9 @@ type InstallSnapshotArgs struct {
 	LeaderId          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
-	data              []byte
-	done              bool
+	Offset            int
+	Data              []byte
+	Done              bool
 }
 
 type InstallSnapshotReply struct {
@@ -243,6 +259,7 @@ func (rf *Raft) serveAsLeader() {
 			continue
 		}
 		go rf.sendOutLogEntryRequests(idx)
+		go rf.sendOutInstallSnapshotRequests(idx)
 	}
 }
 
@@ -250,6 +267,7 @@ func (rf *Raft) serveAsFollower() {
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
 	if time.Since(rf.lastHeard) > rf.electionTimeOut {
+		//become candidate when timeout
 		rf.state = Candidate
 		return
 	}
@@ -379,7 +397,7 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 				lastIdxOfXTerm := getLastLogIdxOfXTerm(rf.log, reply.XTerm)
 				if lastIdxOfXTerm > 0 { // leader has XTerm
 					rf.nextIdx[peerIdx] = lastIdxOfXTerm + 1
-				} else { // leader doesn't have XTerm
+				} else { // leader doesn't have XTerm, so use XIndex
 					rf.nextIdx[peerIdx] = reply.XIndex
 				}
 			}
@@ -410,11 +428,13 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	}
 	if rf.log[args.PrevLogIndex].TermIdx != args.PrevLogTerm {
 		reply.XTerm = rf.log[args.PrevLogIndex].TermIdx
-		for i := args.PrevLogIndex; i >= 0; i-- {
-			reply.XIndex = rf.log[i].LogIdx
+		reply.XIndex = rf.log[args.PrevLogIndex].LogIdx
+		// Find the first index for XTerm in follower's log
+		for i := args.PrevLogIndex - 1; i >= 0; i-- {
 			if rf.log[i].TermIdx != reply.XTerm {
 				break
 			}
+			reply.XIndex = rf.log[i].LogIdx
 		}
 		return
 	}
@@ -422,12 +442,7 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 	reply.Success = true
 
 	// Step down because of leader with higher term
-	if args.Term > rf.currentTerm {
-		rf.stepDownToFollower(-1, args.Term)
-	}
-
-	// Step down if vote for another candidate
-	if rf.state == Candidate && args.Term >= rf.currentTerm {
+	if rf.state != Follower && args.Term > rf.currentTerm {
 		rf.stepDownToFollower(-1, args.Term)
 	}
 
@@ -496,13 +511,13 @@ func (rf *Raft) readPersist(data []byte) {
 func (rf *Raft) sendOutInstallSnapshotRequests(followerIdx int) {
 	// send out install snapshot request
 	args := InstallSnapshotArgs{
-		LeaderId:          rf.me,
-		data:              rf.snaptshot,
 		Term:              rf.currentTerm,
+		LeaderId:          rf.me,
 		LastIncludedIndex: rf.lastIncludedIndex,
 		LastIncludedTerm:  rf.lastIncludedTerm,
-		// offset
-		// done
+		Offset:            rf.offset,
+		Data:              rf.data,
+		Done:              rf.done,
 	}
 	reply := InstallSnapshotReply{}
 	rf.sendInstallSnapshot(followerIdx, &args, &reply)
@@ -520,6 +535,14 @@ func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapsho
 		reply.Term = rf.currentTerm
 		return
 	}
+	msg := ApplyMsg{
+		CommandValid:  false,
+		SnapshotValid: true,
+		SnapshotTerm:  args.LastIncludedTerm,
+		SnapshotIndex: args.LastIncludedIndex,
+		Snapshot:      args.Data,
+	}
+	rf.applyCh <- msg
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -528,7 +551,7 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	// Your code here (2D).
 	// Conditionally insatll snapshot in follower
-
+	// Recommend to simply return true
 	return true
 }
 
@@ -540,12 +563,17 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.lastIncludedIndex = 0
-	rf.lastIncludedTerm = 0
+	rf.lastIncludedIndex = index
+	rf.data = snapshot
 	// trim log
-	// dummyHead := []LogEntry{rf.log[0]}
-	// rf.log = rf.log[index+1:]
-	// rf.log = append(dummyHead, rf.log...)
+	for _, entry := range rf.log {
+		if entry.LogIdx == index {
+			rf.log = rf.log[index-rf.log[0].LogIdx:]
+			rf.log[0].Command = nil
+			rf.persist()
+		}
+	}
+
 }
 
 //
@@ -632,7 +660,7 @@ func (rf *Raft) applyCommits() {
 	// apply commits in target server
 	for rf.lastApplied < rf.commitIdx {
 		rf.lastApplied++
-		msg := ApplyMsg {
+		msg := ApplyMsg{
 			CommandValid: true,
 			Command:      rf.log[rf.lastApplied].Command,
 			CommandIndex: rf.log[rf.lastApplied].LogIdx,
@@ -642,6 +670,8 @@ func (rf *Raft) applyCommits() {
 }
 
 // Collect vote result helper
+// Wait for votes, if get majority's granted vote, just return
+// Otherwise wait until timeout
 func (rf *Raft) collectVoteResults(
 	voteCh <-chan RequestVoteReply, timeout time.Duration) {
 	voteGranted := 1
@@ -729,6 +759,7 @@ func compareTwoLogEntry(a, b LogEntry) int {
 	}
 }
 
+// Leader has XTerm
 func getLastLogIdxOfXTerm(log []LogEntry, term int) int {
 	// return -1 if leader doesn't has X term
 	// return last idx if has X term
