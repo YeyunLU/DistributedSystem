@@ -83,20 +83,15 @@ type Raft struct {
 	dead      int32               // set by Kill()
 
 	// for all servers
-	currentTerm       int
-	state             State
-	votedFor          int
-	log               []LogEntry
-	commitIdx         int
-	lastApplied       int
-	lastHeard         time.Time
-	lastIncludedIndex int
-	lastIncludedTerm  int
-	electionTimeOut   time.Duration
-	applyCh           chan ApplyMsg
-	data              []byte
-	offset            int
-	done              bool
+	currentTerm     int
+	state           State
+	votedFor        int
+	log             []LogEntry
+	commitIdx       int
+	lastApplied     int
+	lastHeard       time.Time
+	electionTimeOut time.Duration
+	applyCh         chan ApplyMsg
 
 	// for leaders
 	nextIdx  []int
@@ -166,9 +161,7 @@ type InstallSnapshotArgs struct {
 	LeaderId          int
 	LastIncludedIndex int
 	LastIncludedTerm  int
-	Offset            int
 	Data              []byte
-	Done              bool
 }
 
 type InstallSnapshotReply struct {
@@ -314,7 +307,7 @@ func (rf *Raft) sendOutVoteRequests(voteCh chan<- RequestVoteReply) {
 			}
 			rf.mu.Lock()
 			if reply.Term > rf.currentTerm {
-				rf.stepDownToFollower(-1, reply.Term)
+				rf.stepDownToFollower(reply.Term)
 				rf.resetTimer()
 			}
 			rf.mu.Unlock()
@@ -342,7 +335,7 @@ func (rf *Raft) RequestVote(args *RequestVoteArgs, reply *RequestVoteReply) {
 	}
 
 	if args.Term > rf.currentTerm {
-		rf.stepDownToFollower(-1, args.Term)
+		rf.stepDownToFollower(args.Term)
 		rf.resetTimer()
 	}
 
@@ -364,7 +357,7 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 		rf.mu.Unlock()
 		return
 	}
-	prevLogIdx := rf.nextIdx[peerIdx] - 1
+	prevLogIdx := rf.getIdxWithOffset(rf.nextIdx[peerIdx] - 1)
 	prevTerm := rf.log[prevLogIdx].TermIdx
 	args := AppendEntriesArgs{
 		Term:         rf.currentTerm,
@@ -382,7 +375,7 @@ func (rf *Raft) sendOutLogEntryRequests(peerIdx int) {
 	}
 	rf.mu.Lock()
 	if reply.Term > args.Term {
-		rf.stepDownToFollower(-1, reply.Term)
+		rf.stepDownToFollower(reply.Term)
 		rf.resetTimer()
 	}
 	if rf.state == Leader {
@@ -443,10 +436,10 @@ func (rf *Raft) AppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply
 
 	// Step down because of leader with higher term
 	if rf.state != Follower && args.Term > rf.currentTerm {
-		rf.stepDownToFollower(-1, args.Term)
+		rf.stepDownToFollower(args.Term)
 	}
 
-	rf.checkAndAppendEntries(args, reply)
+	rf.appendEntries(args, reply)
 
 	// Apply commits if need
 	if args.LeaderCommit > rf.commitIdx {
@@ -467,14 +460,7 @@ func (rf *Raft) persist() {
 	// 2. votedFor
 	// 3. log[]
 
-	buffer := new(bytes.Buffer)
-	encoder := labgob.NewEncoder(buffer)
-	encoder.Encode(rf.currentTerm)
-	encoder.Encode(rf.votedFor)
-	encoder.Encode(rf.log)
-	encoder.Encode(rf.lastIncludedIndex)
-	encoder.Encode(rf.lastIncludedTerm)
-	data := buffer.Bytes()
+	data := rf.serializeState()
 	rf.persister.SaveRaftState(data)
 }
 
@@ -487,40 +473,62 @@ func (rf *Raft) readPersist(data []byte) {
 	// Your code here (2C).
 	buffer := bytes.NewBuffer(data)
 	decoder := labgob.NewDecoder(buffer)
-	var currentTerm, votedFor, lastIncludedIndex, lastIdxOfXTerm int
+	var currentTerm, votedFor int
 
 	var logs []LogEntry
 	if decoder.Decode(&currentTerm) != nil ||
 		decoder.Decode(&votedFor) != nil ||
-		decoder.Decode(&logs) != nil ||
-		decoder.Decode(&lastIncludedIndex) != nil ||
-		decoder.Decode(&lastIdxOfXTerm) != nil {
+		decoder.Decode(&logs) != nil {
 		log.Fatalf("Failed to decode persistent data")
 	} else {
 		rf.currentTerm = currentTerm
 		rf.votedFor = votedFor
 		rf.log = logs
-		rf.lastIncludedIndex = lastIncludedIndex
-		rf.lastIncludedTerm = lastIdxOfXTerm
 	}
+	rf.commitIdx = rf.log[0].LogIdx
+	rf.lastApplied = rf.log[0].LogIdx
+}
+
+func (rf *Raft) serializeState() []byte {
+	buffer := new(bytes.Buffer)
+	encoder := labgob.NewEncoder(buffer)
+	encoder.Encode(rf.currentTerm)
+	encoder.Encode(rf.votedFor)
+	encoder.Encode(rf.log)
+	return buffer.Bytes()
 }
 
 /*------------------- Snapshot logic --------------------*/
 //
-// Send out RPC requests from leader
+// Send out RPC requests from leader to install snapshot
 func (rf *Raft) sendOutInstallSnapshotRequests(followerIdx int) {
 	// send out install snapshot request
-	args := InstallSnapshotArgs{
-		Term:              rf.currentTerm,
-		LeaderId:          rf.me,
-		LastIncludedIndex: rf.lastIncludedIndex,
-		LastIncludedTerm:  rf.lastIncludedTerm,
-		Offset:            rf.offset,
-		Data:              rf.data,
-		Done:              rf.done,
+	rf.mu.Lock()
+	if rf.state != Leader {
+		rf.mu.Unlock()
+		return
 	}
-	reply := InstallSnapshotReply{}
-	rf.sendInstallSnapshot(followerIdx, &args, &reply)
+	if rf.nextIdx[followerIdx] <= rf.log[0].LogIdx {
+		args := InstallSnapshotArgs{
+			Term:              rf.currentTerm,
+			LeaderId:          rf.me,
+			LastIncludedIndex: rf.log[0].LogIdx,
+			LastIncludedTerm:  rf.log[0].TermIdx,
+			Data:              rf.persister.ReadSnapshot(),
+		}
+		rf.mu.Unlock()
+		reply := InstallSnapshotReply{}
+		ok := rf.sendInstallSnapshot(followerIdx, &args, &reply)
+		if !ok {
+			return
+		}
+		rf.mu.Lock()
+		if reply.Term > args.Term {
+			rf.stepDownToFollower(reply.Term)
+			rf.resetTimer()
+		}
+	}
+	rf.mu.Unlock()
 }
 
 // RPC caller
@@ -531,18 +539,28 @@ func (rf *Raft) sendInstallSnapshot(server int, args *InstallSnapshotArgs, reply
 
 // RPC handler
 func (rf *Raft) InstallSnapshot(args *InstallSnapshotArgs, reply *InstallSnapshotReply) {
+	rf.mu.Lock()
 	if args.Term < rf.currentTerm {
-		reply.Term = rf.currentTerm
+		rf.mu.Unlock()
 		return
 	}
-	msg := ApplyMsg{
-		CommandValid:  false,
-		SnapshotValid: true,
-		SnapshotTerm:  args.LastIncludedTerm,
-		SnapshotIndex: args.LastIncludedIndex,
-		Snapshot:      args.Data,
+	rf.resetTimer()
+	if args.Term > rf.currentTerm {
+		rf.currentTerm = args.Term
 	}
-	rf.applyCh <- msg
+	if rf.state != Follower {
+		rf.state = Follower
+	}
+	rf.mu.Unlock()
+	go func() {
+		rf.applyCh <- ApplyMsg{
+			CommandValid:  false,
+			SnapshotValid: true,
+			SnapshotTerm:  args.LastIncludedTerm,
+			SnapshotIndex: args.LastIncludedIndex,
+			Snapshot:      args.Data,
+		}
+	}()
 }
 
 // A service wants to switch to snapshot.  Only do so if Raft hasn't
@@ -551,7 +569,26 @@ func (rf *Raft) CondInstallSnapshot(lastIncludedTerm int, lastIncludedIndex int,
 
 	// Your code here (2D).
 	// Conditionally insatll snapshot in follower
-	// Recommend to simply return true
+
+	rf.mu.Lock()
+	defer rf.mu.Unlock()
+
+	if lastIncludedIndex <= rf.commitIdx {
+		return false
+	}
+
+	if lastIncludedIndex >= rf.log[len(rf.log)-1].LogIdx {
+		rf.log = rf.log[0:1]
+	} else {
+		rf.log = rf.log[lastIncludedIndex-rf.log[0].LogIdx:]
+	}
+
+	rf.log[0].LogIdx = lastIncludedIndex
+	rf.log[0].TermIdx = lastIncludedTerm
+	rf.log[0].Command = nil
+	rf.commitIdx = lastIncludedIndex
+	rf.lastApplied = lastIncludedIndex
+	rf.persister.SaveStateAndSnapshot(rf.serializeState(), snapshot)
 	return true
 }
 
@@ -563,17 +600,14 @@ func (rf *Raft) Snapshot(index int, snapshot []byte) {
 	// Your code here (2D).
 	rf.mu.Lock()
 	defer rf.mu.Unlock()
-	rf.lastIncludedIndex = index
-	rf.data = snapshot
 	// trim log
 	for _, entry := range rf.log {
 		if entry.LogIdx == index {
 			rf.log = rf.log[index-rf.log[0].LogIdx:]
 			rf.log[0].Command = nil
-			rf.persist()
+			rf.persister.SaveStateAndSnapshot(rf.serializeState(), snapshot)
 		}
 	}
-
 }
 
 //
@@ -660,10 +694,11 @@ func (rf *Raft) applyCommits() {
 	// apply commits in target server
 	for rf.lastApplied < rf.commitIdx {
 		rf.lastApplied++
+		lastAppliedIdx := rf.getIdxWithOffset(rf.lastApplied)
 		msg := ApplyMsg{
 			CommandValid: true,
-			Command:      rf.log[rf.lastApplied].Command,
-			CommandIndex: rf.log[rf.lastApplied].LogIdx,
+			Command:      rf.log[lastAppliedIdx].Command,
+			CommandIndex: rf.log[lastAppliedIdx].LogIdx,
 		}
 		rf.applyCh <- msg
 	}
@@ -703,7 +738,7 @@ func (rf *Raft) initializeLeader() {
 	rf.matchIdx[rf.me] = lastLogIdx
 }
 
-func (rf *Raft) stepDownToFollower(votedFor int, updatedTerm int) {
+func (rf *Raft) stepDownToFollower(updatedTerm int) {
 	rf.state = Follower
 	rf.votedFor = -1
 	rf.matchIdx = nil
@@ -714,7 +749,7 @@ func (rf *Raft) stepDownToFollower(votedFor int, updatedTerm int) {
 	rf.persist()
 }
 
-func (rf *Raft) checkAndAppendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
+func (rf *Raft) appendEntries(args *AppendEntriesArgs, reply *AppendEntriesReply) {
 	leaderLogs := args.Entries
 	nextIdx := args.PrevLogIndex + 1
 	idx := 0
@@ -769,4 +804,11 @@ func getLastLogIdxOfXTerm(log []LogEntry, term int) int {
 		}
 	}
 	return -1
+}
+
+func(rf *Raft) getIdxWithOffset(logIndex int) int {
+	if logIndex >= len(rf.log) {
+		return logIndex - rf.log[0].LogIdx
+	}
+	return logIndex
 }
